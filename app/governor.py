@@ -1,39 +1,38 @@
 from app.schemas import ActionProposal, GovernorDecision, Decision
+from app.risk_engine import RiskEngine 
 
 class Governor:
 
+    def __init__(self):
+        self.risk_engine = RiskEngine()
+
     def evaluate(self, proposal : ActionProposal) -> GovernorDecision:
 
-        # Rule 1 : Very low confidence
+        risk_score = self.risk_engine.calculate(proposal)
+
+        if risk_score >= 0.80:
+            return GovernorDecision(
+                decision = Decision.HUMAN_REVIEW,
+                reason = "High Risk Detected",
+                risk_score = risk_score
+            )
+
+        if risk_score >= 0.60:
+            return GovernorDecision(
+                decision = Decision.HUMAN_REVIEW,
+                reason = "Moderate Risk Detected",
+                risk_score = risk_score
+            )
+        
         if proposal.confidence < 0.50:
             return GovernorDecision(
                 decision = Decision.HUMAN_REVIEW,
-                reason = "AI confidnece is too low",
-                risk_score = 0.80
-            )
-
-        #Rule 2 : Dangerous Action
-        dangerous_actions = {"delete_file", "delete_database", "transfer_money"}
-
-        if proposal.action in dangerous_actions:
-            return GovernorDecision(
-                decision = Decision.HUMAN_REVIEW,
-                reason = "Dangerous action detected",
-                risk_score = 0.90
-            )
-
-        
-        #Rule 3: Explicit High Risk
-        if proposal.risk_level.lower() == "high":
-            return GovernorDecision(
-                decision = Decision.HUMAN_REVIEW,
-                reason = "High risk action explicitly flagged",
-                risk_score = 0.95
+                reason = "Low confidence",
+                risk_score = risk_score
             )
 
         return GovernorDecision(
             decision = Decision.ALLOW,
-            reason = "AI passed all the safety checks.",
-            risk_score = 0.20
+            reason = "Low Risk and high confidence",
+            risk_score = risk_score
         )
-

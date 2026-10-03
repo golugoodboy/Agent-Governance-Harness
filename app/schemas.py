@@ -12,10 +12,13 @@ class ActionProposal(BaseModel):
     confidence: float = Field(le = 1.0, ge = 0.0)
     risk_level : str
     target : str | None = None
+    amount : float | None = Field(default = None, ge = 0)
 
 
 class GovernorDecision(BaseModel):
     decision : Decision
     reason : str
     risk_score : float = Field(le = 1.0, ge = 0.0)
+
+
 

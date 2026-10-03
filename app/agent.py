@@ -3,6 +3,16 @@ from app.schemas import ActionProposal
 
 def simulate_agent(request : str) -> ActionProposal:
 
+    if "transfer" in request.lower():
+        return ActionProposal(
+            action = "transfer money",
+            reason = "urgent payment needed",
+            confidence = 0.62,
+            risk_level = "medium",
+            target = "account no. ........",
+            amount = 5000.0
+        )
+
     if "delete" in request.lower():
         return ActionProposal(
             action = "delete file",
@@ -25,5 +35,5 @@ def simulate_agent(request : str) -> ActionProposal:
         action = "search web",
         reason = "general knowledge query",
         confidence = 0.90,
-        risk_level = "low",
+        risk_level = "low"
     )
