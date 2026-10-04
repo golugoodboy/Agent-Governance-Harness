@@ -1,5 +1,6 @@
 from app.agent import simulate_agent
 from app.governor import Governor
+from app.executor import Executor
 
 def run(request : str):
 
@@ -12,17 +13,20 @@ def run(request : str):
     print("\n Agent Proposal")
     print(proposal)
 
-    #harness Evaluated 
-    governor = Governor()
-    decision = governor.evaluate(proposal)
+    executor = Executor()
+    result = executor.execute(proposal)
 
-    print("\n Governor Decision")
-    print(decision)
+    print("\n Executor Result")
+    print(result)
 
-    return decision
+    return result
 
 if __name__ == "__main__":
-    run("Please send an email to the customer")
+    run("send email")
+    run("delete file")
+    run("transfer money")
+    run("Unknown tool")
 
-    run("Please delete the important file")
+
+
 

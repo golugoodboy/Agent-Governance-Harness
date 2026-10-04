@@ -37,3 +37,4 @@ def simulate_agent(request : str) -> ActionProposal:
         confidence = 0.90,
         risk_level = "low"
     )
+

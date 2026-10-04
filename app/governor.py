@@ -1,10 +1,12 @@
 from app.schemas import ActionProposal, GovernorDecision, Decision
 from app.risk_engine import RiskEngine 
+from app.permission import PermissionEngine, Permission
 
 class Governor:
 
     def __init__(self):
         self.risk_engine = RiskEngine()
+        self.permission_engine = PermissionEngine()
 
     def evaluate(self, proposal : ActionProposal) -> GovernorDecision:
 
@@ -31,8 +33,35 @@ class Governor:
                 risk_score = risk_score
             )
 
+        print(
+    f"[HARNESS] action={proposal.action} "
+    f"risk={risk_score}"
+            
+            )
+        #tool permission
+        permission = self.permission_engine.check(proposal)
+
+        if permission == Permission.DENY:
+            return GovernorDecision(
+                decision = Decision.BLOCK,
+                reason = f"Tool {proposal.action} is not authorized.",
+                risk_score = risk_score
+            )
+        
+        if permission == Permission.HUMAN_REVIEW:
+            return GovernorDecision(
+                decision = Decision.HUMAN_REVIEW,
+                reason = f"Tool {proposal.action} needs human approval.",
+                risk_score = risk_score
+            )
+
+        print(
+            f"[HARNESS] permission={permission}"
+        )
+
         return GovernorDecision(
             decision = Decision.ALLOW,
             reason = "Low Risk and high confidence",
             risk_score = risk_score
         )
+
