@@ -26,6 +26,12 @@ class ArgumentValidator:
         if proposal.action == "search_web":
             return self._validate_web(proposal)
 
+        if proposal.action == "unstable_tool":
+            return Validation_result(
+                valid = True,
+                reason = "Unstable tool is valid for testing."
+            )
+
         return Validation_result(
             valid = False,
             reason = "Unknown action"

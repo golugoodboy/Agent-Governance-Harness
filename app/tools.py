@@ -29,3 +29,25 @@ def transfer_money(target : str, amount : float):
         "result" : f"amount {amount} has been transferred to {target}"
     }
 
+
+def unstable_tool(target : str):
+
+    if target == "timeout":
+        return {
+            "status" : "Fail",
+            "tool" : "unstable_tool",
+            "result" : "timeout"
+        }
+
+    if target == "network error":
+        return {
+            "status" : "Fail",
+            "tool" : "unstable_tool",
+            "result" : "network error"
+        }
+
+    return {
+        "status" : "success",
+        "tool" : "unstable_tool",
+        "result" : f"unstable tool used with target {target}"
+    }

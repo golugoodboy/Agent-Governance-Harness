@@ -36,15 +36,14 @@ def run_test(name: str, proposal: ActionProposal):
 if __name__ == "__main__":
      run_test(
     "Valid Transfer",
-    ActionProposal(
-        action="transfer_money",
-        reason="Testing valid transfer",
-        confidence=0.95,
-        risk_level="low",
-        target="account_123",
-        amount=5000
-    )
+   ActionProposal(
+    action="send_email",
+    reason="Testing invalid email",
+    confidence=0.95,
+    risk_level="low",
+    target="not-an-email"
 )
+    )
 
 
 

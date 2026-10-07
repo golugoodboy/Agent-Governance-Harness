@@ -13,7 +13,8 @@ class PermissionEngine:
         "delete_file" : Permission.HUMAN_REVIEW,
         "transfer_money" : Permission.DENY,
         "search_web" : Permission.ALLOW,
-        "send_email" : Permission.ALLOW
+        "send_email" : Permission.ALLOW,
+        "unstable_tool" : Permission.ALLOW
     }
 
     def check(self, proposal : ActionProposal) -> Permission:
