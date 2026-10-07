@@ -1,12 +1,14 @@
 from app.schemas import ActionProposal, GovernorDecision, Decision
 from app.risk_engine import RiskEngine 
 from app.permission import PermissionEngine, Permission
+from app.argument_validator import ArgumentValidator
 
 class Governor:
 
     def __init__(self):
         self.risk_engine = RiskEngine()
         self.permission_engine = PermissionEngine()
+        self.validator = ArgumentValidator()
 
     def evaluate(self, proposal : ActionProposal) -> GovernorDecision:
 
@@ -58,6 +60,22 @@ class Governor:
         print(
             f"[HARNESS] permission={permission}"
         )
+
+        #validator 
+
+        validation = self.validator.validate(proposal)
+
+        print(
+            f"Harness Validation :{validation.valid}, "
+            f"Reason: {validation.reason}"
+        )
+
+        if not validation.valid:
+            return GovernorDecision(
+                decision = Decision.BLOCK,
+                reason = validation.reason,
+                risk_score = risk_score
+            )
 
         return GovernorDecision(
             decision = Decision.ALLOW,

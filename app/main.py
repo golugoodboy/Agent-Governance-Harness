@@ -1,6 +1,7 @@
 from app.agent import simulate_agent
 from app.governor import Governor
 from app.executor import Executor
+from app.schemas import ActionProposal
 
 def run(request : str):
 
@@ -21,11 +22,29 @@ def run(request : str):
 
     return result
 
+def run_test(name: str, proposal: ActionProposal):
+    print(f"\n--- Running Test: {name} ---")
+    print("Agent Proposal:", proposal)
+    
+    executor = Executor()
+    result = executor.execute(proposal)
+    
+    print("\nExecutor Result:")
+    print(result)
+    return result
+
 if __name__ == "__main__":
-    run("send email")
-    run("delete file")
-    run("transfer money")
-    run("Unknown tool")
+     run_test(
+    "Valid Transfer",
+    ActionProposal(
+        action="transfer_money",
+        reason="Testing valid transfer",
+        confidence=0.95,
+        risk_level="low",
+        target="account_123",
+        amount=5000
+    )
+)
 
 
 
