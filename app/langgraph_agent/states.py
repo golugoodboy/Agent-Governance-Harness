@@ -1,11 +1,16 @@
-from typing import TypedDict, Optional
+from typing import TypedDict, Optional, Any
 from app.schemas import ActionProposal
 
 class AgentState(TypedDict, total = False):
     user_request : str
     proposal : Optional[ActionProposal]
-    execution_result : Optional[str]
+    governance_decision : Optional[str]
+    execution_result : Optional[dict[str, Any]]
     status : str
+    audit_log : list[str]
+
+
+    
 
 
 

@@ -38,7 +38,9 @@ def agent_node(state):
 
     return {
         "proposal": proposal,
-        "status" : "Proposal Created"}
+        "status" : "Proposal Created",
+        "audit_log" : [f"Agent Proposed Action {proposal.action}"]}
+
 
 
 def governor_node(state):
@@ -49,11 +51,23 @@ def governor_node(state):
 
     result = executor.execute(proposal)
 
-    print("\n Executor Result: ")
-    print(result)
+    decision = result.get("decision")
 
+    if decision is not None:
+        decision = getattr(decision, "value", str(decision))
+    
+    if decision is None: 
+        decision = ("ALLOW" if result.get("status") == "success" else "UNKNOWN")
+    
+
+    
     return {
+        "governance_decision": decision,
         "execution_result" : result,
-        "status" : result.get("status", "Unknown")
+        "status" : ("Completed" if result.get("status") == "success" else result.get("status", "Unknown")),
+        "audit_log" : [f"Governance Decided {decision}", f"Execution Status : {result.get("status")}"]
     }
+
+    
+
 

@@ -2,7 +2,7 @@ from app.langgraph_agent.graph import build_graph
 
 def run_agent(user_request):
 
-    app = build_graph()
+    graph = build_graph()
 
     print("\n" + "=" * 70)
     print("LANGGRAPH GOVERNANCE TEST")
@@ -12,19 +12,27 @@ def run_agent(user_request):
 
     result = graph.invoke({
         "user_request" : user_request,
-        "status" : "Pending"
+        "status" : "started",
+        "audit_log" : []
     })
 
-    print("\nFinal Graph State")
-    print(result)
+    print("\n--- V0.6.2 Final State ---")
+    print("Status:", result.get("status"))
+    print("Governance:", result.get("governance_decision"))
+    print("Proposal:", result.get("proposal"))
+    print("Execution:", result.get("execution_result"))
+
+    print("\nAudit Log:")
+    for event in result.get("audit_log", []):
+        print("-", event)
 
     return result
 
 if __name__ == "__main__":
-
     run_agent(
-        "Please send an email to the customer"
+        "Search for AI news"
     )
+
 
 
     

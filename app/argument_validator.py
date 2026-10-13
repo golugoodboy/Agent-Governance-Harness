@@ -58,7 +58,7 @@ class ArgumentValidator:
             reason = "Email is correct."
         )
 
-    def _validation_search(self, proposal: ActionProposal) -> Validation_result:
+    def _validate_web(self, proposal: ActionProposal) -> Validation_result:
 
         if not proposal.target:
             return Validation_result(
@@ -66,7 +66,7 @@ class ArgumentValidator:
                 reason = "Search is empty."
             )
 
-        if (proposal.target.strip()) < 2:
+        if len(proposal.target.strip()) < 2:
             return Validation_result(
                 valid = False,
                 reason = "Query is short to search."
