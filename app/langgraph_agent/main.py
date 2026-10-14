@@ -30,7 +30,7 @@ def run_agent(user_request):
 
 if __name__ == "__main__":
     run_agent(
-        "Search for AI news"
+        "Delete the file ../../../../etc/passwd"
     )
 
 
