@@ -1,4 +1,5 @@
-from typing import TypedDict, Optional, Any
+import operator
+from typing import TypedDict, Optional, Any, Annotated
 from app.schemas import ActionProposal
 
 class AgentState(TypedDict, total = False):
@@ -7,10 +8,14 @@ class AgentState(TypedDict, total = False):
     governance_decision : Optional[str]
     execution_result : Optional[dict[str, Any]]
     status : str
-    audit_log : list[str]
+    audit_log : Annotated[list[str], operator.add]
+
+    step_count : int
+    max_steps : int
+    final_response : str
+    next_step : str
 
 
-    
 
 
 

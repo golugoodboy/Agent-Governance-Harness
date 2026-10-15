@@ -134,3 +134,125 @@ class LLMProposalAgent:
             raise ValueError("amount must be numeric or null.")
 
         return ActionProposal(**data)
+
+
+    def propose_followup(
+        self,
+        user_request : str,
+        previous_proposal : ActionProposal,
+        execution_result : dict,
+        step_count : int,
+        max_steps : int
+        ) -> dict:
+         """
+        Decide whether to finish or propose another action.
+
+        Returns either:
+        {"decision": "finish", "final_response": "..."}
+
+        or:
+        {"decision": "continue", "proposal": ActionProposal(...)}
+        """
+
+         prompt = f"""
+You are deciding the next step of a governed AI workflow.
+
+Original user request:
+{user_request}
+
+Previous action:
+{previous_proposal.model_dump_json()}
+
+Previous execution result:
+{execution_result}
+
+Executed proposals so far: {step_count}
+Maximum permitted proposals: {max_steps}
+
+Return exactly one JSON object.
+
+To finish:
+{{
+  "decision": "finish",
+  "final_response": "A concise response to the user"
+}}
+
+To request another action:
+{{
+  "decision": "continue",
+  "proposal": {{
+    "action": "search_web",
+    "reason": "Why this action is necessary",
+    "confidence": 0.90,
+    "risk_level": "low",
+    "target": "Search query",
+    "amount": null
+  }}
+}}
+
+Rules:
+- If the original request is satisfied, finish.
+- If the previous action failed or was blocked, finish.
+- If the maximum number of proposals has been reached, finish.
+- Do not repeat a successful action without a clear reason.
+- Only propose an action if it is necessary for the original request.
+- Never claim an action succeeded unless its execution result confirms it.
+- The harness, not you, authorizes execution.
+- Return JSON only, without Markdown fences.
+"""
+
+         response = self.client.models.generate_content(
+            model=self.model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction="You are a cautious workflow planner. Follow the requested JSON format.",
+                temperature=0.1,
+                max_output_tokens=400,
+                response_mime_type="application/json",
+            ),
+        )
+
+         content = response.text
+
+         if not content: 
+            raise ValueError("LLM returned empty response")
+
+         data = json.loads(content.strip())
+
+         if not isinstance(data, dict):
+            raise ValueError("LLM must return JSON Object.")
+
+         decision = data.get("decision")
+
+         if decision == "finish":
+            final_response = data.get("final_response")
+
+            if not isinstance(final_response, str):
+                raise ValueError("final_response must be a string")
+            
+            return {
+                "decision" : "finish",
+                "final_response" : final_response
+            }
+
+         if decision == "continue":
+
+            proposal_data = data.get("proposal")
+
+            if not isinstance(proposal_data, dict):
+                raise ValueError("Proposal must be a dict")
+
+            proposal = ActionProposal(**proposal_data)
+
+            return {
+                "decision" : "continue", 
+                "proposal" : proposal
+            }
+         
+         raise ValueError("Invalid decision")
+            
+
+        
+
+
+    
