@@ -16,7 +16,7 @@ class Executor:
         # Track attempts for each execution
         self.attempt_history = {}
 
-    def execute(self, proposal: ActionProposal):
+    def execute(self, proposal: ActionProposal, human_approved: bool = False):
 
         # --------------------------------------------------
         # 1. Normalize the tool name
@@ -35,7 +35,7 @@ class Executor:
         # 2. Governance check
         # --------------------------------------------------
 
-        decision = self.governor.evaluate(proposal)
+        decision = self.governor.evaluate(proposal, human_approved = human_approved)
 
         print("\n[EXECUTOR] Governor Decision")
         print(decision)
