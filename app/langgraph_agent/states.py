@@ -15,6 +15,10 @@ class AgentState(TypedDict, total = False):
     final_response : str
     next_step : str
 
+    approval_status : str
+
+
+
 
 
 

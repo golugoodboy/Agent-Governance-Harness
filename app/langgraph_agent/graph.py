@@ -1,6 +1,8 @@
 from langgraph.graph import START, END, StateGraph
 from app.langgraph_agent.states import AgentState 
 from app.langgraph_agent.nodes import agent_node, governor_node, route_after_agent, result_node , followup_node, route_after_followup
+from langgraph.checkpoint.memory import InMemorySaver
+
 
 def build_graph():
     workflow = StateGraph(AgentState)
@@ -29,7 +31,9 @@ def build_graph():
     )
     workflow.add_edge("result", END)
 
-    app = workflow.compile()
+    checkpointer = InMemorySaver()
+    app = workflow.compile(checkpointer=checkpointer)
 
     return app
+
 

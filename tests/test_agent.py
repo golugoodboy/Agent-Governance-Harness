@@ -52,14 +52,17 @@ def test_followup_proposal_returns_to_governance():
     ):
         graph = build_graph()
 
-        result = graph.invoke({
-            "user_request": "Research AI agent evaluation",
-            "status": "started",
-            "audit_log": [],
-            "step_count": 0,
-            "max_steps": 2,
-            "final_response": "",
-        })
+        result = graph.invoke(
+            {
+                "user_request": "Research AI agent evaluation",
+                "status": "started",
+                "audit_log": [],
+                "step_count": 0,
+                "max_steps": 2,
+                "final_response": "",
+            },
+            config={"configurable": {"thread_id": "test-followup-thread"}},
+        )
 
     assert followup.call_count == 1
     assert result["step_count"] == 2
@@ -69,11 +72,12 @@ def test_followup_proposal_returns_to_governance():
 
 def test_blocked_action_does_not_trigger_followup():
     proposal = ActionProposal(
-        action="delete_file",
+        action="transfer_money",
         reason="Testing blocked action",
         confidence=0.99,
         risk_level="high",
-        target="../../../../etc/passwd",
+        target="malicious_account",
+        amount=5000,
     )
 
     with (
@@ -94,14 +98,17 @@ def test_blocked_action_does_not_trigger_followup():
     ):
         graph = build_graph()
 
-        result = graph.invoke({
-            "user_request": "Delete a sensitive file",
-            "status": "started",
-            "audit_log": [],
-            "step_count": 0,
-            "max_steps": 3,
-            "final_response": "",
-        })
+        result = graph.invoke(
+            {
+                "user_request": "Delete a sensitive file",
+                "status": "started",
+                "audit_log": [],
+                "step_count": 0,
+                "max_steps": 3,
+                "final_response": "",
+            },
+            config={"configurable": {"thread_id": "test-blocked-thread"}},
+        )
 
     assert execute.call_count == 1
     followup.assert_not_called()

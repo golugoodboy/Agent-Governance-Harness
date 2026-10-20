@@ -1,6 +1,9 @@
 from app.schemas import ActionProposal
 from app.executor import Executor
 from app.langgraph_agent.llm_agent import LLMProposalAgent
+from langgraph.types import interrupt
+from app.schemas import Decision
+from app.approval import proposal_fingerprint
 
 
 # LLM Node that generates a proposal
@@ -90,44 +93,126 @@ def route_after_agent(state):
 
 #Governance Node that executes the proposal and updates the state.
 def governor_node(state):
-
     proposal = state["proposal"]
+    executor = Executor() 
 
-    executor = Executor()
+    preliminary = executor.governor.evaluate(proposal)
+    decision = preliminary.decision
+
+    if decision == Decision.BLOCK:
+        result = executor.execute(proposal)
+
+        return {
+            "governance_decision": "BLOCK",
+            "execution_result": result,
+            "step_count": state.get("step_count", 0) + 1,
+            "status": result.get("status", "blocked"),
+            "approval_status": "not_required",
+            "audit_log": [
+                "Governance decision: BLOCK",
+                "Execution status: blocked",
+                "Hard denial cannot be overridden by approval.",
+            ],
+        }
+     
+    
+    if decision == Decision.HUMAN_REVIEW:
+        fingerprint = proposal_fingerprint(proposal)
+
+        approval = interrupt({
+            "type": "approval_required",
+            "action": proposal.action,
+            "target": proposal.target,
+            "amount": proposal.amount,
+            "reason": preliminary.reason,
+            "risk_score": preliminary.risk_score,
+            "fingerprint": fingerprint,
+            "message": "Approve or reject this exact proposed action.",
+        })
+
+        # Recalculate the fingerprint after resuming.
+        current_fingerprint = proposal_fingerprint(proposal)
+
+        approved = (
+            isinstance(approval, dict)
+            and approval.get("approved") is True
+            and approval.get("fingerprint") == current_fingerprint
+        )
+
+        if not approved:
+            fingerprint_matches = (
+                isinstance(approval, dict)
+                and approval.get("fingerprint") == current_fingerprint
+            )
+
+            reason = (
+                "Approval rejected or invalid."
+                if not isinstance(approval, dict)
+                or approval.get("approved") is not True
+                else "Proposal fingerprint mismatch. Execution denied."
+            )
+
+            result = {
+                "status": "blocked",
+                "reason": reason,
+            }
+
+            return {
+            "governance_decision": "HUMAN_REVIEW",
+            "execution_result": result,
+            "step_count": state.get("step_count", 0) + 1,
+            "status": "blocked",
+            "approval_status": (
+                "rejected" if fingerprint_matches else "invalidated"
+            ),
+            "audit_log": [
+                "Governance decision: HUMAN_REVIEW",
+                reason,
+                "Execution status: blocked",
+            ],
+        }
+
+        # Executor runs its governance checks again after approval.
+        result = executor.execute(proposal, human_approved=True)
+
+        final_decision = result.get("decision", Decision.ALLOW)
+        final_decision = getattr(final_decision, "value", str(final_decision))
+        successful = result.get("status") == "success"
+
+        return {
+            "governance_decision": final_decision,
+            "execution_result": result,
+            "step_count": state.get("step_count", 0) + 1,
+            "status": result.get("status", "unknown"),
+            "approval_status": (
+                "approved" if successful else "approved_but_not_executed"
+            ),
+            "audit_log": [
+                "Human approval matched the pending proposal fingerprint.",
+                f"Post-approval governance decision: {final_decision}",
+                f"Execution status: {result.get('status', 'unknown')}",
+            ],
+        }
+
 
     result = executor.execute(proposal)
+    final_decision = result.get("decision", decision)
+    final_decision = getattr(
+        final_decision, "value", str(final_decision)
+    )
 
-    decision = result.get("decision")
-
-    if decision is not None:
-        decision = getattr(decision, "value", str(decision))
-    elif result.get("status") == "success":
-        decision = "ALLOW"
-    elif result.get("status") == "blocked":
-        decision = "BLOCKED"
-    else:
-        decision = "UNKNOWN"
-
-    previous_count = state.get("step_count", 0)
-    new_count = previous_count + 1
-    
-
-    
     return {
-        "governance_decision": decision,
+        "governance_decision": final_decision,
         "execution_result": result,
-        "step_count": new_count,
-        "status": (
-            "completed"
-            if result.get("status") == "success"
-            else result.get("status", "unknown")
-        ),
+        "step_count": state.get("step_count", 0) + 1,
+        "status": result.get("status", "unknown"),
+        "approval_status": "not_required",
         "audit_log": [
-            f"Governance decision: {decision}",
+            f"Governance decision: {final_decision}",
             f"Execution status: {result.get('status', 'unknown')}",
-            f"Proposal count: {new_count}",
         ],
     }
+
 
     
 #Result node, that gives the final result to the user
