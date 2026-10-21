@@ -110,7 +110,7 @@ def test_blocked_action_does_not_trigger_followup():
             config={"configurable": {"thread_id": "test-blocked-thread"}},
         )
 
-    assert execute.call_count == 1
+    assert execute.call_count == 0
     followup.assert_not_called()
     assert result["step_count"] == 1
     assert result["status"] == "blocked"

@@ -4,7 +4,7 @@ from app.langgraph_agent.llm_agent import LLMProposalAgent
 from langgraph.types import interrupt
 from app.schemas import Decision
 from app.approval import proposal_fingerprint
-
+from app.audit_logger import AuditLogger
 
 # LLM Node that generates a proposal
 def agent_node(state):
@@ -92,33 +92,75 @@ def route_after_agent(state):
 
 
 #Governance Node that executes the proposal and updates the state.
+
 def governor_node(state):
     proposal = state["proposal"]
-    executor = Executor() 
+    executor = Executor()
+    audit = AuditLogger()
 
     preliminary = executor.governor.evaluate(proposal)
     decision = preliminary.decision
+    fingerprint = proposal_fingerprint(proposal)
 
+    def record_execution(result, approval_status):
+        execution_status = result.get("status", "unknown")
+
+        if execution_status == "success":
+            event_type = "execution_completed"
+        elif execution_status == "blocked":
+            event_type = "execution_blocked"
+        else:
+            event_type = "execution_failed"
+
+        audit.append_event(
+            event_type,
+            proposal_fingerprint=fingerprint,
+            action=proposal.action,
+            decision=getattr(
+                result.get("decision", decision),
+                "value",
+                str(result.get("decision", decision)),
+            ),
+            risk_score=preliminary.risk_score,
+            approval_status=approval_status,
+            execution_status=execution_status,
+            details={"source": "langgraph_governor_node"},
+        )
+
+    # Record hard denials without calling the executor again.
     if decision == Decision.BLOCK:
-        result = executor.execute(proposal)
+        audit.append_event(
+            "governance_decision",
+            proposal_fingerprint=fingerprint,
+            action=proposal.action,
+            decision="BLOCK",
+            risk_score=preliminary.risk_score,
+            approval_status="not_required",
+        )
+
+        result = {
+            "status": "blocked",
+            "decision": Decision.BLOCK,
+            "reason": preliminary.reason,
+        }
+
+        record_execution(result, "not_required")
 
         return {
             "governance_decision": "BLOCK",
             "execution_result": result,
             "step_count": state.get("step_count", 0) + 1,
-            "status": result.get("status", "blocked"),
+            "status": "blocked",
             "approval_status": "not_required",
             "audit_log": [
                 "Governance decision: BLOCK",
                 "Execution status: blocked",
-                "Hard denial cannot be overridden by approval.",
             ],
         }
-     
-    
-    if decision == Decision.HUMAN_REVIEW:
-        fingerprint = proposal_fingerprint(proposal)
 
+    # Human review: do not write audit events before interrupt().
+    # LangGraph reruns this node when the interrupt resumes.
+    if decision == Decision.HUMAN_REVIEW:
         approval = interrupt({
             "type": "approval_required",
             "action": proposal.action,
@@ -130,13 +172,20 @@ def governor_node(state):
             "message": "Approve or reject this exact proposed action.",
         })
 
-        # Recalculate the fingerprint after resuming.
         current_fingerprint = proposal_fingerprint(proposal)
 
         approved = (
             isinstance(approval, dict)
             and approval.get("approved") is True
             and approval.get("fingerprint") == current_fingerprint
+        )
+
+        audit.append_event(
+            "governance_decision",
+            proposal_fingerprint=current_fingerprint,
+            action=proposal.action,
+            decision="HUMAN_REVIEW",
+            risk_score=preliminary.risk_score,
         )
 
         if not approved:
@@ -152,41 +201,67 @@ def governor_node(state):
                 else "Proposal fingerprint mismatch. Execution denied."
             )
 
-            result = {
-                "status": "blocked",
-                "reason": reason,
-            }
+            approval_status = (
+                "rejected" if fingerprint_matches else "invalidated"
+            )
+
+            audit.append_event(
+                "approval_rejected"
+                if approval_status == "rejected"
+                else "approval_invalidated",
+                proposal_fingerprint=current_fingerprint,
+                action=proposal.action,
+                decision="HUMAN_REVIEW",
+                risk_score=preliminary.risk_score,
+                approval_status=approval_status,
+                execution_status="blocked",
+            )
+
+            result = {"status": "blocked", "reason": reason}
+            record_execution(result, approval_status)
 
             return {
-            "governance_decision": "HUMAN_REVIEW",
-            "execution_result": result,
-            "step_count": state.get("step_count", 0) + 1,
-            "status": "blocked",
-            "approval_status": (
-                "rejected" if fingerprint_matches else "invalidated"
-            ),
-            "audit_log": [
-                "Governance decision: HUMAN_REVIEW",
-                reason,
-                "Execution status: blocked",
-            ],
-        }
+                "governance_decision": "HUMAN_REVIEW",
+                "execution_result": result,
+                "step_count": state.get("step_count", 0) + 1,
+                "status": "blocked",
+                "approval_status": approval_status,
+                "audit_log": [
+                    "Governance decision: HUMAN_REVIEW",
+                    reason,
+                    "Execution status: blocked",
+                ],
+            }
 
-        # Executor runs its governance checks again after approval.
+        audit.append_event(
+            "approval_approved",
+            proposal_fingerprint=current_fingerprint,
+            action=proposal.action,
+            decision="HUMAN_REVIEW",
+            risk_score=preliminary.risk_score,
+            approval_status="approved",
+        )
+
         result = executor.execute(proposal, human_approved=True)
 
         final_decision = result.get("decision", Decision.ALLOW)
-        final_decision = getattr(final_decision, "value", str(final_decision))
+        final_decision = getattr(
+            final_decision, "value", str(final_decision)
+        )
+
         successful = result.get("status") == "success"
+        final_approval_status = (
+            "approved" if successful else "approved_but_not_executed"
+        )
+
+        record_execution(result, final_approval_status)
 
         return {
             "governance_decision": final_decision,
             "execution_result": result,
             "step_count": state.get("step_count", 0) + 1,
             "status": result.get("status", "unknown"),
-            "approval_status": (
-                "approved" if successful else "approved_but_not_executed"
-            ),
+            "approval_status": final_approval_status,
             "audit_log": [
                 "Human approval matched the pending proposal fingerprint.",
                 f"Post-approval governance decision: {final_decision}",
@@ -194,12 +269,24 @@ def governor_node(state):
             ],
         }
 
+    # Low-risk ALLOW path.
+    audit.append_event(
+        "governance_decision",
+        proposal_fingerprint=fingerprint,
+        action=proposal.action,
+        decision="ALLOW",
+        risk_score=preliminary.risk_score,
+        approval_status="not_required",
+    )
 
     result = executor.execute(proposal)
+
     final_decision = result.get("decision", decision)
     final_decision = getattr(
         final_decision, "value", str(final_decision)
     )
+
+    record_execution(result, "not_required")
 
     return {
         "governance_decision": final_decision,
