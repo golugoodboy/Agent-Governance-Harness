@@ -3,8 +3,12 @@ from langgraph.types import Command
 
 from app.langgraph_agent.graph import build_graph
 
+import uuid
+
 
 def run_agent(user_request):
+
+    audit_run_id = str(uuid.uuid4())
 
     graph = build_graph()
 
@@ -20,16 +24,18 @@ def run_agent(user_request):
     print(f"\nUser Request: {user_request}")
 
     result = graph.invoke(
-        {
-            "user_request": user_request,
-            "status": "started",
-            "audit_log": [],
-            "step_count": 0,
-            "max_steps": 3,
-            "final_response": "",
-        },
-        config=config,
+    {
+        "user_request": user_request,
+        "audit_run_id": audit_run_id,
+        "status": "started",
+        "audit_log": [],
+        "step_count": 0,
+        "max_steps": 3,
+        "final_response": "",
+    },
+    config=config,
     )
+
 
     # Handle any human approval interrupts.
     while result.get("__interrupt__"):

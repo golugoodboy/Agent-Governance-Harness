@@ -1,5 +1,6 @@
 
 import sqlite3
+import pytest
 
 from app.audit_logger import AuditLogger
 
@@ -74,3 +75,67 @@ def test_modified_event_is_detected(tmp_path):
 
     assert result["valid"] is False
     assert result["reason"] == "Event hash mismatch"
+
+
+def test_duplicate_idempotency_key_does_not_duplicate_event(tmp_path):
+    logger = AuditLogger(tmp_path / "idempotency.db")
+
+    first = logger.append_event(
+        "governance_decision",
+        action="send_email",
+        decision="ALLOW",
+        risk_score=0.10,
+        idempotency_key="session-1:governance-decision",
+    )
+
+    second = logger.append_event(
+        "governance_decision",
+        action="send_email",
+        decision="ALLOW",
+        risk_score=0.10,
+        idempotency_key="session-1:governance-decision",
+    )
+
+    events = logger.list_events()
+
+    assert first["event_id"] == second["event_id"]
+    assert len(events) == 1
+    assert logger.verify_integrity()["valid"] is True
+
+
+def test_idempotency_key_cannot_be_reused_for_different_event(tmp_path):
+    logger = AuditLogger(tmp_path / "idempotency_conflict.db")
+
+    logger.append_event(
+        "governance_decision",
+        action="send_email",
+        decision="ALLOW",
+        idempotency_key="session-2:decision",
+    )
+
+    with pytest.raises(ValueError, match="different event"):
+        logger.append_event(
+            "governance_decision",
+            action="delete_file",
+            decision="ALLOW",
+            idempotency_key="session-2:decision",
+        )
+
+    assert len(logger.list_events()) == 1
+    assert logger.verify_integrity()["valid"] is True
+
+
+def test_distinct_idempotency_keys_create_distinct_events(tmp_path):
+    logger = AuditLogger(tmp_path / "distinct_keys.db")
+
+    for key in ("session-3:event-1", "session-3:event-2"):
+        logger.append_event(
+            "governance_decision",
+            action="send_email",
+            decision="ALLOW",
+            idempotency_key=key,
+        )
+
+    assert len(logger.list_events()) == 2
+    assert logger.verify_integrity()["valid"] is True
+

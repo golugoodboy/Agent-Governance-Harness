@@ -102,6 +102,16 @@ def governor_node(state):
     decision = preliminary.decision
     fingerprint = proposal_fingerprint(proposal)
 
+    audit_run_id = state.get("audit_run_id")
+
+    if not audit_run_id:
+        raise ValueError(
+            "audit_run_id is required for idempotent audit logging"
+        )
+
+    def audit_key(event_type: str) -> str:
+        return f"{audit_run_id}:{fingerprint}:{event_type}"
+
     def record_execution(result, approval_status):
         execution_status = result.get("status", "unknown")
 
@@ -125,6 +135,7 @@ def governor_node(state):
             approval_status=approval_status,
             execution_status=execution_status,
             details={"source": "langgraph_governor_node"},
+            idempotency_key=audit_key(event_type),
         )
 
     # Record hard denials without calling the executor again.
@@ -136,6 +147,7 @@ def governor_node(state):
             decision="BLOCK",
             risk_score=preliminary.risk_score,
             approval_status="not_required",
+            idempotency_key=audit_key("governance_decision"),
         )
 
         result = {
@@ -161,6 +173,22 @@ def governor_node(state):
     # Human review: do not write audit events before interrupt().
     # LangGraph reruns this node when the interrupt resumes.
     if decision == Decision.HUMAN_REVIEW:
+
+        audit.append_event(
+            "approval_requested",
+            proposal_fingerprint=fingerprint,
+            action=proposal.action,
+            decision="HUMAN_REVIEW",
+            risk_score=preliminary.risk_score,
+            approval_status="pending",
+            details={
+                "source": "langgraph_governor_node",
+                "reason": preliminary.reason,
+                "audit_run_id": audit_run_id,
+            },
+            idempotency_key=audit_key("approval_requested"),
+        )
+        
         approval = interrupt({
             "type": "approval_required",
             "action": proposal.action,
@@ -186,6 +214,7 @@ def governor_node(state):
             action=proposal.action,
             decision="HUMAN_REVIEW",
             risk_score=preliminary.risk_score,
+            idempotency_key=audit_key("governance_decision")
         )
 
         if not approved:
@@ -205,16 +234,21 @@ def governor_node(state):
                 "rejected" if fingerprint_matches else "invalidated"
             )
 
-            audit.append_event(
+            event_type = (
                 "approval_rejected"
                 if approval_status == "rejected"
-                else "approval_invalidated",
+                else "approval_invalidated"
+            )
+
+            audit.append_event(
+                event_type,
                 proposal_fingerprint=current_fingerprint,
                 action=proposal.action,
                 decision="HUMAN_REVIEW",
                 risk_score=preliminary.risk_score,
                 approval_status=approval_status,
                 execution_status="blocked",
+                idempotency_key=audit_key(event_type),
             )
 
             result = {"status": "blocked", "reason": reason}
@@ -240,6 +274,7 @@ def governor_node(state):
             decision="HUMAN_REVIEW",
             risk_score=preliminary.risk_score,
             approval_status="approved",
+            idempotency_key=audit_key("approval_approved")
         )
 
         result = executor.execute(proposal, human_approved=True)
@@ -277,6 +312,7 @@ def governor_node(state):
         decision="ALLOW",
         risk_score=preliminary.risk_score,
         approval_status="not_required",
+        idempotency_key=audit_key("governance_decision")
     )
 
     result = executor.execute(proposal)

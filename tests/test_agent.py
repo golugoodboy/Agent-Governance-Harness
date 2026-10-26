@@ -55,6 +55,7 @@ def test_followup_proposal_returns_to_governance():
         result = graph.invoke(
             {
                 "user_request": "Research AI agent evaluation",
+                "audit_run_id": "test-agent-followup-run",
                 "status": "started",
                 "audit_log": [],
                 "step_count": 0,
@@ -101,6 +102,7 @@ def test_blocked_action_does_not_trigger_followup():
         result = graph.invoke(
             {
                 "user_request": "Delete a sensitive file",
+                "audit_run_id": "test-agent-blocked-run",
                 "status": "started",
                 "audit_log": [],
                 "step_count": 0,

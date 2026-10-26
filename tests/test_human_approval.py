@@ -52,9 +52,12 @@ def build_test_graph(monkeypatch, execution_calls):
     return workflow.compile(checkpointer=InMemorySaver())
 
 
-def make_initial_state():
+import uuid
+
+def make_initial_state(run_id: str | None = None):
     return {
         "user_request": "Send a test email",
+        "audit_run_id": run_id or f"test-human-approval-{uuid.uuid4()}",
         "proposal": ActionProposal(
             action="send_email",
             reason="Test approval workflow",

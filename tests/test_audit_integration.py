@@ -9,6 +9,8 @@ from langgraph.types import Command
 from app.approval import proposal_fingerprint
 from app.langgraph_agent.states import AgentState
 
+import pytest
+
 
 def test_blocked_action_is_audited_without_execution(
     monkeypatch, tmp_path
@@ -51,6 +53,7 @@ def test_blocked_action_is_audited_without_execution(
 
     result = nodes.governor_node({
         "proposal": proposal,
+        "audit_run_id": "test-run-blocked",
         "status": "proposal_created",
         "audit_log": [],
         "step_count": 0,
@@ -144,6 +147,7 @@ def test_rejected_approval_is_audited(monkeypatch, tmp_path):
     interrupted = graph.invoke(
         {
             "proposal": proposal,
+            "audit_run_id": "test-run-rejected",
             "status": "proposal_created",
             "audit_log": [],
             "step_count": 0,
@@ -167,6 +171,7 @@ def test_rejected_approval_is_audited(monkeypatch, tmp_path):
     assert "governance_decision" in event_types
     assert "approval_rejected" in event_types
     assert "execution_blocked" in event_types
+    assert "approval_requested" in event_types
     assert execution_calls == []
     assert logger.verify_integrity()["valid"] is True
 
@@ -190,6 +195,7 @@ def test_approved_execution_is_audited(monkeypatch, tmp_path):
     interrupted = graph.invoke(
         {
             "proposal": proposal,
+            "audit_run_id": "test-run-approved",
             "status": "proposal_created",
             "audit_log": [],
             "step_count": 0,
@@ -216,6 +222,7 @@ def test_approved_execution_is_audited(monkeypatch, tmp_path):
         "human_approved": True,
     }]
     assert "approval_approved" in event_types
+    assert "approval_requested" in event_types
     assert "execution_completed" in event_types
     assert logger.verify_integrity()["valid"] is True
 
@@ -241,6 +248,7 @@ def test_tampered_proposal_is_audited_and_blocked(
     interrupted = graph.invoke(
         {
             "proposal": proposal,
+            "audit_run_id": "test-run-tamper",
             "status": "proposal_created",
             "audit_log": [],
             "step_count": 0,
@@ -276,4 +284,100 @@ def test_tampered_proposal_is_audited_and_blocked(
     assert execution_calls == []
     assert "approval_invalidated" in event_types
     assert "execution_blocked" in event_types
+    assert "approval_requested" in event_types
     assert logger.verify_integrity()["valid"] is True
+
+
+
+def test_audit_failure_prevents_execution(monkeypatch):
+    execution_calls = []
+
+    class FakeGovernor:
+        def evaluate(self, proposal):
+            return GovernorDecision(
+                decision=Decision.ALLOW,
+                reason="Authorized",
+                risk_score=0.10,
+            )
+
+    class FakeExecutor:
+        def __init__(self):
+            self.governor = FakeGovernor()
+
+        def execute(self, *args, **kwargs):
+            execution_calls.append((args, kwargs))
+            return {"status": "success"}
+
+    class BrokenAuditLogger:
+        def __init__(self):
+            pass
+
+        def append_event(self, *args, **kwargs):
+            raise OSError("Simulated audit database failure")
+
+    monkeypatch.setattr(nodes, "Executor", FakeExecutor)
+    monkeypatch.setattr(nodes, "AuditLogger", BrokenAuditLogger)
+
+    proposal = ActionProposal(
+        action="send_email",
+        reason="Test audit failure",
+        confidence=0.95,
+        risk_level="low",
+        target="test@example.com",
+    )
+
+    try:
+        nodes.governor_node({
+            "proposal": proposal,
+            "audit_run_id": "test-run-failure",
+            "status": "proposal_created",
+            "audit_log": [],
+            "step_count": 0,
+        })
+    except OSError as exc:
+        assert "audit database failure" in str(exc)
+    else:
+        raise AssertionError("Expected audit failure to stop execution")
+
+    assert execution_calls == []
+
+
+
+def test_missing_audit_run_id_fails_closed(monkeypatch):
+    execution_calls = []
+
+    class FakeGovernor:
+        def evaluate(self, proposal):
+            return GovernorDecision(
+                decision=Decision.ALLOW,
+                reason="Authorized",
+                risk_score=0.10,
+            )
+
+    class FakeExecutor:
+        def __init__(self):
+            self.governor = FakeGovernor()
+
+        def execute(self, *args, **kwargs):
+            execution_calls.append((args, kwargs))
+            return {"status": "success"}
+
+    monkeypatch.setattr(nodes, "Executor", FakeExecutor)
+
+    proposal = ActionProposal(
+        action="send_email",
+        reason="Test missing run ID",
+        confidence=0.95,
+        risk_level="low",
+        target="test@example.com",
+    )
+
+    with pytest.raises(ValueError, match="audit_run_id is required"):
+        nodes.governor_node({
+            "proposal": proposal,
+            "status": "proposal_created",
+            "audit_log": [],
+            "step_count": 0,
+        })
+
+    assert execution_calls == []

@@ -4,6 +4,7 @@ from app.schemas import ActionProposal
 
 class AgentState(TypedDict, total = False):
     user_request : str
+    audit_run_id: str
     proposal : Optional[ActionProposal]
     governance_decision : Optional[str]
     execution_result : Optional[dict[str, Any]]
@@ -16,6 +17,9 @@ class AgentState(TypedDict, total = False):
     next_step : str
 
     approval_status : str
+
+
+
 
 
 

@@ -1,9 +1,9 @@
-
 import hashlib
 import json
 import os
 import sqlite3
 import uuid
+import pytest
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,27 +33,52 @@ class AuditLogger:
     def _connect(self):
         return sqlite3.connect(str(self.db_path), timeout=10)
 
+   
     def _initialize_database(self):
         with self._connect() as connection:
             connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS audit_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    event_id TEXT NOT NULL UNIQUE,
-                    timestamp TEXT NOT NULL,
-                    event_type TEXT NOT NULL,
-                    proposal_fingerprint TEXT,
-                    action TEXT,
-                    decision TEXT,
-                    risk_score REAL,
-                    approval_status TEXT,
-                    execution_status TEXT,
-                    details_json TEXT NOT NULL,
-                    previous_hash TEXT NOT NULL,
-                    event_hash TEXT NOT NULL
-                )
-                """
+            """
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL UNIQUE,
+                timestamp TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                proposal_fingerprint TEXT,
+                action TEXT,
+                decision TEXT,
+                risk_score REAL,
+                approval_status TEXT,
+                execution_status TEXT,
+                details_json TEXT NOT NULL,
+                previous_hash TEXT NOT NULL,
+                event_hash TEXT NOT NULL,
+                idempotency_key TEXT
             )
+            """
+        )
+
+            columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(audit_events)"
+            ).fetchall()
+        }
+
+            if "idempotency_key" not in columns:
+                connection.execute(
+                    "ALTER TABLE audit_events ADD COLUMN idempotency_key TEXT"
+                )
+
+            connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                idx_audit_events_idempotency_key
+            ON audit_events(idempotency_key)
+            """
+        )
+
+
+
 
     @staticmethod
     def _hash_event(event: dict[str, Any]) -> str:
@@ -66,6 +91,7 @@ class AuditLogger:
 
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
+    
     def append_event(
         self,
         event_type: str,
@@ -77,9 +103,13 @@ class AuditLogger:
         approval_status: str | None = None,
         execution_status: str | None = None,
         details: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         if not event_type.strip():
             raise ValueError("event_type cannot be empty")
+
+        if idempotency_key is not None and not idempotency_key.strip():
+            raise ValueError("idempotency_key cannot be empty")
 
         details_json = json.dumps(
             details or {},
@@ -89,9 +119,62 @@ class AuditLogger:
         )
 
         with self._connect() as connection:
-            # BEGIN IMMEDIATE serializes concurrent writers before
-            # they read the previous event's hash.
             connection.execute("BEGIN IMMEDIATE")
+
+            if idempotency_key is not None:
+                existing = connection.execute(
+                    """
+                    SELECT id, event_id, timestamp, event_type,
+                           proposal_fingerprint, action, decision, risk_score,
+                           approval_status, execution_status, details_json,
+                           previous_hash, event_hash, idempotency_key
+                    FROM audit_events
+                    WHERE idempotency_key = ?
+                    """,
+                    (idempotency_key,),
+                ).fetchone()
+
+                if existing is not None:
+                    columns = [
+                        "id", "event_id", "timestamp", "event_type",
+                        "proposal_fingerprint", "action", "decision",
+                        "risk_score", "approval_status", "execution_status",
+                        "details_json", "previous_hash", "event_hash",
+                        "idempotency_key",
+                    ]
+                    previous_event = dict(zip(columns, existing))
+
+                    comparable_fields = (
+                        "event_type",
+                        "proposal_fingerprint",
+                        "action",
+                        "decision",
+                        "risk_score",
+                        "approval_status",
+                        "execution_status",
+                        "details_json",
+                    )
+
+                    requested_values = {
+                        "event_type": event_type,
+                        "proposal_fingerprint": proposal_fingerprint,
+                        "action": action,
+                        "decision": decision,
+                        "risk_score": risk_score,
+                        "approval_status": approval_status,
+                        "execution_status": execution_status,
+                        "details_json": details_json,
+                    }
+
+                    if any(
+                        previous_event[field] != requested_values[field]
+                        for field in comparable_fields
+                    ):
+                        raise ValueError(
+                            "Idempotency key already exists for a different event"
+                        )
+
+                    return previous_event
 
             previous = connection.execute(
                 """
@@ -128,9 +211,9 @@ class AuditLogger:
                     id, event_id, timestamp, event_type,
                     proposal_fingerprint, action, decision, risk_score,
                     approval_status, execution_status, details_json,
-                    previous_hash, event_hash
+                    previous_hash, event_hash, idempotency_key
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event["id"],
@@ -146,11 +229,14 @@ class AuditLogger:
                     event["details_json"],
                     event["previous_hash"],
                     event_hash,
+                    idempotency_key,
                 ),
             )
 
             event["event_hash"] = event_hash
+            event["idempotency_key"] = idempotency_key
             return event
+
 
     def list_events(self) -> list[dict[str, Any]]:
         with self._connect() as connection:
