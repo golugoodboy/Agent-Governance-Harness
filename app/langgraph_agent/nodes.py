@@ -174,6 +174,76 @@ def governor_node(state):
     # LangGraph reruns this node when the interrupt resumes.
     if decision == Decision.HUMAN_REVIEW:
 
+        
+        # Detect a proposal that changed while approval was pending.
+        existing_request = next(
+            (
+                event
+                for event in reversed(audit.list_events())
+                if event["event_type"] == "approval_requested"
+                and event.get("details", {}).get("audit_run_id")
+                == audit_run_id
+            ),
+            None,
+        )
+
+        if (
+            existing_request is not None
+            and existing_request["proposal_fingerprint"] != fingerprint
+        ):
+            reason = (
+                "Proposal fingerprint mismatch. Execution denied."
+            )
+
+            audit.append_event(
+                "governance_decision",
+                proposal_fingerprint=fingerprint,
+                action=proposal.action,
+                decision="HUMAN_REVIEW",
+                risk_score=preliminary.risk_score,
+                idempotency_key=audit_key("governance_decision"),
+            )
+
+            audit.append_event(
+                "approval_invalidated",
+                proposal_fingerprint=fingerprint,
+                action=proposal.action,
+                decision="HUMAN_REVIEW",
+                risk_score=preliminary.risk_score,
+                approval_status="invalidated",
+                execution_status="blocked",
+                details={
+                    "source": "langgraph_governor_node",
+                    "audit_run_id": audit_run_id,
+                    "original_proposal_fingerprint":
+                        existing_request["proposal_fingerprint"],
+                    "current_proposal_fingerprint": fingerprint,
+                },
+                idempotency_key=audit_key("approval_invalidated"),
+            )
+
+            result = {
+                "status": "blocked",
+                "decision": Decision.HUMAN_REVIEW,
+                "reason": reason,
+            }
+
+            record_execution(result, "invalidated")
+
+            return {
+                "governance_decision": "HUMAN_REVIEW",
+                "execution_result": result,
+                "step_count": state.get("step_count", 0) + 1,
+                "status": "blocked",
+                "approval_status": "invalidated",
+                "audit_log": [
+                    "Governance decision: HUMAN_REVIEW",
+                    reason,
+                    "Execution status: blocked",
+                ],
+           }
+
+
         audit.append_event(
             "approval_requested",
             proposal_fingerprint=fingerprint,

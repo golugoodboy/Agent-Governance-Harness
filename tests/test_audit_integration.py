@@ -166,12 +166,15 @@ def test_rejected_approval_is_audited(monkeypatch, tmp_path):
     )
 
     logger = AuditLogger(db_path)
-    event_types = [e["event_type"] for e in logger.list_events()]
+    events = logger.list_events()
+    event_types = [event["event_type"] for event in events]
 
-    assert "governance_decision" in event_types
-    assert "approval_rejected" in event_types
-    assert "execution_blocked" in event_types
-    assert "approval_requested" in event_types
+    assert event_types == [
+    "approval_requested",
+    "governance_decision",
+    "approval_rejected",
+    "execution_blocked",
+    ]
     assert execution_calls == []
     assert logger.verify_integrity()["valid"] is True
 
@@ -191,6 +194,7 @@ def test_approved_execution_is_audited(monkeypatch, tmp_path):
     graph = build_audit_test_graph()
     config = {"configurable": {"thread_id": "approve-test"}}
     proposal = make_review_proposal()
+    fingerprint = proposal_fingerprint(proposal)
 
     interrupted = graph.invoke(
         {
@@ -206,25 +210,47 @@ def test_approved_execution_is_audited(monkeypatch, tmp_path):
     assert "__interrupt__" in interrupted
 
     result = graph.invoke(
-        Command(resume={
-            "approved": True,
-            "fingerprint": proposal_fingerprint(proposal),
-        }),
+        Command(
+            resume={
+                "approved": True,
+                "fingerprint": fingerprint,
+            }
+        ),
         config=config,
     )
 
     logger = AuditLogger(db_path)
-    event_types = [e["event_type"] for e in logger.list_events()]
+    events = logger.list_events()
+    event_types = [event["event_type"] for event in events]
 
     assert result["status"] == "success"
     assert execution_calls == [{
         "action": "send_email",
         "human_approved": True,
     }]
-    assert "approval_approved" in event_types
-    assert "approval_requested" in event_types
-    assert "execution_completed" in event_types
+
+    # Verify exact event ordering.
+    assert event_types == [
+        "approval_requested",
+        "governance_decision",
+        "approval_approved",
+        "execution_completed",
+    ]
+
+    # Every event must reference the same proposal.
+    assert all(
+        event["proposal_fingerprint"] == fingerprint
+        for event in events
+    )
+
+    # Every event must have a distinct idempotency key.
+    keys = [event["idempotency_key"] for event in events]
+    assert all(key is not None for key in keys)
+    assert len(keys) == len(set(keys))
+
+    # The audit hash chain must remain intact.
     assert logger.verify_integrity()["valid"] is True
+
 
 
 
@@ -280,11 +306,14 @@ def test_tampered_proposal_is_audited_and_blocked(
     events = logger.list_events()
     event_types = [e["event_type"] for e in events]
 
+    assert event_types == [
+        "approval_requested",
+        "governance_decision",
+        "approval_invalidated",
+        "execution_blocked",
+    ]
     assert result["status"] == "blocked"
     assert execution_calls == []
-    assert "approval_invalidated" in event_types
-    assert "execution_blocked" in event_types
-    assert "approval_requested" in event_types
     assert logger.verify_integrity()["valid"] is True
 
 
