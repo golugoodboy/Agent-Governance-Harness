@@ -90,6 +90,7 @@ def test_rejected_action_is_not_executed(monkeypatch):
         Command(
             resume={
                 "approved": False,
+                "approval_id": details["approval_id"],
                 "fingerprint": details["fingerprint"],
             }
         ),
@@ -118,6 +119,7 @@ def test_approved_action_is_executed(monkeypatch):
         Command(
             resume={
                 "approved": True,
+                "approval_id": details["approval_id"],
                 "fingerprint": details["fingerprint"],
             }
         ),
@@ -160,6 +162,7 @@ def test_changed_proposal_invalidates_approval(monkeypatch):
         Command(
             resume={
                 "approved": True,
+                "approval_id": details["approval_id"],
                 "fingerprint": details["fingerprint"],
             }
         ),

@@ -68,6 +68,7 @@ def run_agent(user_request):
                     resume={
                         "approved": approved,
                         "fingerprint": details.get("fingerprint"),
+                        "approval_id": details.get("approval_id")
                     }
     ),
     config=config,

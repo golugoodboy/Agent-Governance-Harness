@@ -5,6 +5,10 @@ from langgraph.types import interrupt
 from app.schemas import Decision
 from app.approval import proposal_fingerprint
 from app.audit_logger import AuditLogger
+import uuid
+from app.approval_registry import ApprovalRegistry
+
+
 
 # LLM Node that generates a proposal
 def agent_node(state):
@@ -97,12 +101,14 @@ def governor_node(state):
     proposal = state["proposal"]
     executor = Executor()
     audit = AuditLogger()
+    registry = ApprovalRegistry()
 
     preliminary = executor.governor.evaluate(proposal)
     decision = preliminary.decision
     fingerprint = proposal_fingerprint(proposal)
 
     audit_run_id = state.get("audit_run_id")
+    approval_id = state.get("approval_id")
 
     if not audit_run_id:
         raise ValueError(
@@ -172,25 +178,44 @@ def governor_node(state):
 
     # Human review: do not write audit events before interrupt().
     # LangGraph reruns this node when the interrupt resumes.
+    
+    
     if decision == Decision.HUMAN_REVIEW:
 
-        
-        # Detect a proposal that changed while approval was pending.
-        existing_request = next(
-            (
-                event
-                for event in reversed(audit.list_events())
-                if event["event_type"] == "approval_requested"
-                and event.get("details", {}).get("audit_run_id")
-                == audit_run_id
-            ),
-            None,
+        # Stable across LangGraph interrupt/resume.
+        # A new workflow step gets a different approval ID.
+        approval_id = str(
+            uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"{audit_run_id}:{state.get('step_count', 0)}",
+    )
+)
+
+        # Retrieve an existing request, or create a new one.
+        registered = registry.get_approval(approval_id)
+
+        if registered is None:
+            registered = registry.create_pending(
+                approval_id=approval_id,
+                audit_run_id=audit_run_id,
+                proposal_fingerprint=fingerprint,
+                action=proposal.action,
+            )
+
+        # Ensure the ID is still bound to the original request.
+        same_request = (
+            registered["audit_run_id"] == audit_run_id
+            and registered["proposal_fingerprint"] == fingerprint
+            and registered["action"] == proposal.action
         )
 
-        if (
-            existing_request is not None
-            and existing_request["proposal_fingerprint"] != fingerprint
-        ):
+        if not same_request:
+            registry.consume_approval(
+                approval_id=approval_id,
+                proposal_fingerprint=fingerprint,
+                approved=True,
+            )
+
             reason = (
                 "Proposal fingerprint mismatch. Execution denied."
             )
@@ -212,13 +237,7 @@ def governor_node(state):
                 risk_score=preliminary.risk_score,
                 approval_status="invalidated",
                 execution_status="blocked",
-                details={
-                    "source": "langgraph_governor_node",
-                    "audit_run_id": audit_run_id,
-                    "original_proposal_fingerprint":
-                        existing_request["proposal_fingerprint"],
-                    "current_proposal_fingerprint": fingerprint,
-                },
+                details={"approval_id": approval_id},
                 idempotency_key=audit_key("approval_invalidated"),
             )
 
@@ -236,14 +255,35 @@ def governor_node(state):
                 "step_count": state.get("step_count", 0) + 1,
                 "status": "blocked",
                 "approval_status": "invalidated",
+                "approval_id": approval_id,
                 "audit_log": [
                     "Governance decision: HUMAN_REVIEW",
                     reason,
                     "Execution status: blocked",
                 ],
-           }
+            }
 
+        # Never allow a previously consumed approval to be reused.
+        if registered["status"] != "pending":
+            reason = (
+                f"Approval cannot be reused: {registered['status']}"
+            )
 
+            return {
+                "governance_decision": "HUMAN_REVIEW",
+                "execution_result": {
+                    "status": "blocked",
+                    "decision": Decision.HUMAN_REVIEW,
+                    "reason": reason,
+                },
+                "step_count": state.get("step_count", 0) + 1,
+                "status": "blocked",
+                "approval_status": registered["status"],
+                "approval_id": approval_id,
+                "audit_log": [reason, "Execution status: blocked"],
+            }
+
+        # Idempotency prevents a duplicate event on node resume.
         audit.append_event(
             "approval_requested",
             proposal_fingerprint=fingerprint,
@@ -253,14 +293,15 @@ def governor_node(state):
             approval_status="pending",
             details={
                 "source": "langgraph_governor_node",
-                "reason": preliminary.reason,
                 "audit_run_id": audit_run_id,
+                "approval_id": approval_id,
             },
             idempotency_key=audit_key("approval_requested"),
         )
-        
+
         approval = interrupt({
             "type": "approval_required",
+            "approval_id": approval_id,
             "action": proposal.action,
             "target": proposal.target,
             "amount": proposal.amount,
@@ -270,58 +311,83 @@ def governor_node(state):
             "message": "Approve or reject this exact proposed action.",
         })
 
-        current_fingerprint = proposal_fingerprint(proposal)
-
-        approved = (
-            isinstance(approval, dict)
-            and approval.get("approved") is True
-            and approval.get("fingerprint") == current_fingerprint
-        )
-
+        # Append governance_decision upon resume for audit trail
         audit.append_event(
             "governance_decision",
-            proposal_fingerprint=current_fingerprint,
+            proposal_fingerprint=fingerprint,
             action=proposal.action,
             decision="HUMAN_REVIEW",
             risk_score=preliminary.risk_score,
-            idempotency_key=audit_key("governance_decision")
+            idempotency_key=audit_key("governance_decision"),
         )
 
-        if not approved:
-            fingerprint_matches = (
-                isinstance(approval, dict)
-                and approval.get("fingerprint") == current_fingerprint
+        # Validate the complete response — approval_id is strictly required.
+        valid_response = (
+            isinstance(approval, dict)
+            and approval.get("approval_id") == approval_id
+            and approval.get("fingerprint") == fingerprint
+            and type(approval.get("approved")) is bool
+        )
+
+        if not valid_response:
+            # A malformed or mismatched response invalidates the request.
+            registry.consume_approval(
+                approval_id=approval_id,
+                proposal_fingerprint = "invalid-response",
+                approved = False,
+                )
+
+            approval_status = "invalidated"
+            reason = "Invalid, stale, or replayed approval response."
+
+            event_type = "approval_invalidated"
+
+        else:
+            # Atomically consume the approval or rejection.
+            consumed = registry.consume_approval(
+                approval_id=approval_id,
+                proposal_fingerprint=fingerprint,
+                approved=approval["approved"],
             )
 
-            reason = (
-                "Approval rejected or invalid."
-                if not isinstance(approval, dict)
-                or approval.get("approved") is not True
-                else "Proposal fingerprint mismatch. Execution denied."
-            )
+            approval_status = consumed["status"]
 
-            approval_status = (
-                "rejected" if fingerprint_matches else "invalidated"
-            )
+            if not consumed["valid"]:
+                reason = consumed["reason"]
+                event_type = "approval_invalidated"
 
-            event_type = (
-                "approval_rejected"
-                if approval_status == "rejected"
-                else "approval_invalidated"
-            )
+            elif approval_status == "rejected":
+                reason = "Human approval rejected."
+                event_type = "approval_rejected"
 
+            elif approval_status == "consumed":
+                reason = "Human approval accepted."
+                event_type = "approval_approved"
+
+            else:
+                reason = "Approval could not be validated."
+                event_type = "approval_invalidated"
+
+        # Rejected, invalidated, and replayed requests cannot execute.
+        if approval_status != "consumed":
             audit.append_event(
                 event_type,
-                proposal_fingerprint=current_fingerprint,
+                proposal_fingerprint=fingerprint,
                 action=proposal.action,
                 decision="HUMAN_REVIEW",
                 risk_score=preliminary.risk_score,
                 approval_status=approval_status,
                 execution_status="blocked",
+                details={"approval_id": approval_id},
                 idempotency_key=audit_key(event_type),
             )
 
-            result = {"status": "blocked", "reason": reason}
+            result = {
+                "status": "blocked",
+                "decision": Decision.HUMAN_REVIEW,
+                "reason": reason,
+            }
+
             record_execution(result, approval_status)
 
             return {
@@ -330,33 +396,43 @@ def governor_node(state):
                 "step_count": state.get("step_count", 0) + 1,
                 "status": "blocked",
                 "approval_status": approval_status,
+                "approval_id": approval_id,
                 "audit_log": [
-                    "Governance decision: HUMAN_REVIEW",
                     reason,
                     "Execution status: blocked",
                 ],
             }
 
+        # Only a successfully consumed approval reaches execution.
         audit.append_event(
             "approval_approved",
-            proposal_fingerprint=current_fingerprint,
+            proposal_fingerprint=fingerprint,
             action=proposal.action,
             decision="HUMAN_REVIEW",
             risk_score=preliminary.risk_score,
             approval_status="approved",
-            idempotency_key=audit_key("approval_approved")
+            details={"approval_id": approval_id},
+            idempotency_key=audit_key("approval_approved"),
         )
 
-        result = executor.execute(proposal, human_approved=True)
+        result = executor.execute(
+            proposal,
+            human_approved=True,
+        )
 
         final_decision = result.get("decision", Decision.ALLOW)
         final_decision = getattr(
-            final_decision, "value", str(final_decision)
+            final_decision,
+            "value",
+            str(final_decision),
         )
 
         successful = result.get("status") == "success"
+
         final_approval_status = (
-            "approved" if successful else "approved_but_not_executed"
+            "approved"
+            if successful
+            else "approved_but_not_executed"
         )
 
         record_execution(result, final_approval_status)
@@ -367,12 +443,14 @@ def governor_node(state):
             "step_count": state.get("step_count", 0) + 1,
             "status": result.get("status", "unknown"),
             "approval_status": final_approval_status,
+            "approval_id": approval_id,
             "audit_log": [
-                "Human approval matched the pending proposal fingerprint.",
+                "Human approval validated and consumed.",
                 f"Post-approval governance decision: {final_decision}",
                 f"Execution status: {result.get('status', 'unknown')}",
             ],
         }
+
 
     # Low-risk ALLOW path.
     audit.append_event(

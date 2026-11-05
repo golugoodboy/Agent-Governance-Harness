@@ -18,6 +18,8 @@ class AgentState(TypedDict, total = False):
 
     approval_status : str
 
+    approval_id: Optional[str]
+
 
 
 

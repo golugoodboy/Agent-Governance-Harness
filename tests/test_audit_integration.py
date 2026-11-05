@@ -1,4 +1,5 @@
 from app.audit_logger import AuditLogger
+from app.approval_registry import ApprovalRegistry
 from app.schemas import ActionProposal, Decision, GovernorDecision
 import app.langgraph_agent.nodes as nodes
 
@@ -131,8 +132,12 @@ def make_review_executor(execution_calls):
 
 def test_rejected_approval_is_audited(monkeypatch, tmp_path):
     db_path = tmp_path / "rejected_audit.db"
+    reg_path = tmp_path / "rejected_reg.db"
     monkeypatch.setattr(
         nodes, "AuditLogger", lambda: AuditLogger(db_path)
+    )
+    monkeypatch.setattr(
+        nodes, "ApprovalRegistry", lambda: ApprovalRegistry(reg_path)
     )
 
     execution_calls = []
@@ -156,10 +161,12 @@ def test_rejected_approval_is_audited(monkeypatch, tmp_path):
     )
 
     assert "__interrupt__" in interrupted
+    interrupt_details = interrupted["__interrupt__"][0].value
 
     graph.invoke(
         Command(resume={
             "approved": False,
+            "approval_id": interrupt_details["approval_id"],
             "fingerprint": proposal_fingerprint(proposal),
         }),
         config=config,
@@ -182,8 +189,12 @@ def test_rejected_approval_is_audited(monkeypatch, tmp_path):
 
 def test_approved_execution_is_audited(monkeypatch, tmp_path):
     db_path = tmp_path / "approved_audit.db"
+    reg_path = tmp_path / "approved_reg.db"
     monkeypatch.setattr(
         nodes, "AuditLogger", lambda: AuditLogger(db_path)
+    )
+    monkeypatch.setattr(
+        nodes, "ApprovalRegistry", lambda: ApprovalRegistry(reg_path)
     )
 
     execution_calls = []
@@ -208,11 +219,13 @@ def test_approved_execution_is_audited(monkeypatch, tmp_path):
     )
 
     assert "__interrupt__" in interrupted
+    interrupt_details = interrupted["__interrupt__"][0].value
 
     result = graph.invoke(
         Command(
             resume={
                 "approved": True,
+                "approval_id": interrupt_details["approval_id"],
                 "fingerprint": fingerprint,
             }
         ),
@@ -258,8 +271,12 @@ def test_tampered_proposal_is_audited_and_blocked(
     monkeypatch, tmp_path
 ):
     db_path = tmp_path / "tampered_audit.db"
+    reg_path = tmp_path / "tampered_reg.db"
     monkeypatch.setattr(
         nodes, "AuditLogger", lambda: AuditLogger(db_path)
+    )
+    monkeypatch.setattr(
+        nodes, "ApprovalRegistry", lambda: ApprovalRegistry(reg_path)
     )
 
     execution_calls = []
@@ -283,6 +300,7 @@ def test_tampered_proposal_is_audited_and_blocked(
     )
 
     assert "__interrupt__" in interrupted
+    interrupt_details = interrupted["__interrupt__"][0].value
 
     original_fingerprint = proposal_fingerprint(proposal)
     changed_proposal = proposal.model_copy(
@@ -297,6 +315,7 @@ def test_tampered_proposal_is_audited_and_blocked(
     result = graph.invoke(
         Command(resume={
             "approved": True,
+            "approval_id": interrupt_details["approval_id"],
             "fingerprint": original_fingerprint,
         }),
         config=config,
