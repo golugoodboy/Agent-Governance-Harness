@@ -60,15 +60,14 @@ class ApprovalRegistry:
                 ).fetchall()
             }
 
-            # Migrate existing databases safely.
+            # Migrate databases created before V0.11.
             if "expires_at" not in columns:
                 connection.execute("""
                     ALTER TABLE approval_requests
                     ADD COLUMN expires_at TEXT
                 """)
 
-            # Give existing records an expiration based on
-            # their original creation time.
+            # Backfill expiration for existing records.
             rows = connection.execute("""
                 SELECT approval_id, created_at
                 FROM approval_requests
@@ -83,13 +82,16 @@ class ApprovalRegistry:
                 expires_at = (
                     created_at
                     + timedelta(seconds=self.ttl_seconds)
-                ).isoformat()
+                )
 
                 connection.execute("""
                     UPDATE approval_requests
                     SET expires_at = ?
                     WHERE approval_id = ?
-                """, (expires_at, row["approval_id"]))
+                """, (
+                    expires_at.isoformat(),
+                    row["approval_id"],
+                ))
 
     def _expire_if_needed(self, connection, row):
         if row["status"] != "pending":
@@ -99,10 +101,10 @@ class ApprovalRegistry:
             row["expires_at"]
         )
 
-        if self._now() < expires_at:
-            return dict(row)
+        current_time = self._now()
 
-        now = self._now().isoformat()
+        if current_time < expires_at:
+            return dict(row)
 
         connection.execute("""
             UPDATE approval_requests
@@ -110,7 +112,10 @@ class ApprovalRegistry:
                 updated_at = ?
             WHERE approval_id = ?
               AND status = 'pending'
-        """, (now, row["approval_id"]))
+        """, (
+            current_time.isoformat(),
+            row["approval_id"],
+        ))
 
         updated = connection.execute("""
             SELECT *
@@ -221,8 +226,6 @@ class ApprovalRegistry:
         Expired approvals cannot be consumed.
         """
 
-        now = self._now().isoformat()
-
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
 
@@ -252,12 +255,15 @@ class ApprovalRegistry:
                     f"Approval is no longer pending: {row['status']}"
                 )
 
+            now = self._now().isoformat()
+
             if row["proposal_fingerprint"] != proposal_fingerprint:
                 connection.execute("""
                     UPDATE approval_requests
                     SET status = 'invalidated',
                         updated_at = ?
                     WHERE approval_id = ?
+                      AND status = 'pending'
                 """, (now, approval_id))
 
                 return {

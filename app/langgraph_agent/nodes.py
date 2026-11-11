@@ -202,12 +202,14 @@ def governor_node(state):
                 action=proposal.action,
             )
 
+
         # Ensure the ID is still bound to the original request.
         same_request = (
             registered["audit_run_id"] == audit_run_id
             and registered["proposal_fingerprint"] == fingerprint
             and registered["action"] == proposal.action
         )
+
 
         if not same_request:
             registry.consume_approval(
@@ -263,27 +265,55 @@ def governor_node(state):
                 ],
             }
 
-        # Never allow a previously consumed approval to be reused.
+        # Never allow expired, consumed, rejected, or invalidated
+        # approvals to be reused.
         if registered["status"] != "pending":
-            reason = (
-                f"Approval cannot be reused: {registered['status']}"
-            )
+            approval_status = registered["status"]
+
+            if approval_status == "expired":
+                reason = "Approval request expired. Human approval is required again."
+
+                audit.append_event(
+                    "approval_expired",
+                    proposal_fingerprint=fingerprint,
+                    action=proposal.action,
+                    decision="HUMAN_REVIEW",
+                    risk_score=preliminary.risk_score,
+                    approval_status="expired",
+                    execution_status="blocked",
+                    details={
+                        "approval_id": approval_id,
+                        "expires_at": registered["expires_at"],
+                    },
+                    idempotency_key=audit_key("approval_expired"),
+                )
+            else:
+                reason = f"Approval cannot be reused: {approval_status}"
+
+            result = {
+                "status": "blocked",
+                "decision": Decision.HUMAN_REVIEW,
+                "reason": reason,
+            }
+
+            record_execution(result, approval_status)
 
             return {
                 "governance_decision": "HUMAN_REVIEW",
-                "execution_result": {
-                    "status": "blocked",
-                    "decision": Decision.HUMAN_REVIEW,
-                    "reason": reason,
-                },
+                "execution_result": result,
                 "step_count": state.get("step_count", 0) + 1,
                 "status": "blocked",
-                "approval_status": registered["status"],
+                "approval_status": approval_status,
                 "approval_id": approval_id,
-                "audit_log": [reason, "Execution status: blocked"],
+                "audit_log": [
+                    reason,
+                    "Execution status: blocked",
+                ],
             }
 
-        # Idempotency prevents a duplicate event on node resume.
+        # IMPORTANT: These statements must be OUTSIDE the
+        # registered["status"] != "pending" block.
+
         audit.append_event(
             "approval_requested",
             proposal_fingerprint=fingerprint,
@@ -311,7 +341,10 @@ def governor_node(state):
             "message": "Approve or reject this exact proposed action.",
         })
 
-        # Append governance_decision upon resume for audit trail
+        # Keep all your existing resume, validation,
+        # consumption, and execution logic here.
+
+    # Append governance_decision upon resume for audit trail
         audit.append_event(
             "governance_decision",
             proposal_fingerprint=fingerprint,
@@ -354,7 +387,13 @@ def governor_node(state):
 
             if not consumed["valid"]:
                 reason = consumed["reason"]
-                event_type = "approval_invalidated"
+
+                if consumed["status"] == "expired":
+                    approval_status = "expired"
+                    event_type = "approval_expired"
+                else:
+                    approval_status = "invalidated"
+                    event_type = "approval_invalidated"
 
             elif approval_status == "rejected":
                 reason = "Human approval rejected."
